@@ -2130,6 +2130,56 @@ func TestOpenAIGatewayServiceRecordUsage_ImageUsesPerImageBillingEvenWithUsageTo
 	require.InDelta(t, 0.0, usageRepo.lastLog.ImageOutputCost, 1e-12)
 }
 
+func TestOpenAIGatewayServiceRecordUsage_GPTImage2UsesReportedTokensWithoutExplicitImagePrice(t *testing.T) {
+	groupID := int64(1208)
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := newOpenAIRecordUsageServiceForTest(
+		usageRepo,
+		&openAIRecordUsageUserRepoStub{},
+		&openAIRecordUsageSubRepoStub{},
+		nil,
+	)
+	pricingSvc := NewPricingService(nil, nil)
+	pricingSvc.pricingData["gpt-image-2"] = &LiteLLMModelPricing{
+		InputCostPerToken:       5e-6,
+		OutputCostPerImageToken: 30e-6,
+		InputCostPerImageToken:  8e-6,
+		LiteLLMProvider:         "openai",
+		Mode:                    "image_generation",
+	}
+	svc.billingService = NewBillingService(svc.cfg, pricingSvc)
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "resp_gpt_image_2_token_billing",
+			Model:     "gpt-image-2",
+			Usage: OpenAIUsage{
+				InputTokens:       100,
+				OutputTokens:      1000,
+				ImageOutputTokens: 1000,
+			},
+			ImageCount: 1,
+			ImageSize:  "1K",
+			Duration:   time.Second,
+		},
+		APIKey: &APIKey{
+			ID:      11208,
+			GroupID: i64p(groupID),
+			Group:   &Group{ID: groupID, RateMultiplier: 1.0},
+		},
+		User:    &User{ID: 21208},
+		Account: &Account{ID: 31208},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.BillingMode)
+	require.Equal(t, string(BillingModeToken), *usageRepo.lastLog.BillingMode)
+	require.InDelta(t, 100*5e-6, usageRepo.lastLog.InputCost, 1e-12)
+	require.InDelta(t, 1000*30e-6, usageRepo.lastLog.ImageOutputCost, 1e-12)
+	require.InDelta(t, 0.0305, usageRepo.lastLog.TotalCost, 1e-12)
+}
+
 func TestOpenAIGatewayServiceRecordUsage_ImageSharedMultiplierPreservesExistingBehavior(t *testing.T) {
 	imagePrice := 0.2
 	groupID := int64(121)

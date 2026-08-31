@@ -542,9 +542,22 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 		return s.billingService.CalculateAudioCost(result.AudioUsage.Mode, result.AudioUsage.DurationOrUnits, cfg, webSearchMultiplier), nil
 	}
 
+	useReportedGPTImageTokens := false
 	if result != nil && result.ImageCount > 0 {
-		// 渠道定价为 token 计费时走 token 路径，否则走图片计费
-		if resolved := s.resolveOpenAIChannelPricing(ctx, billingModel, apiKey); resolved == nil || resolved.Mode != BillingModeToken {
+		// GPT Image 2 reports image output tokens. When no explicit per-image
+		// price is configured, prefer those real usage tokens over the legacy
+		// generic image fallback ($0.134 with 1K/2K/4K multipliers).
+		// Explicit group/channel image prices remain authoritative.
+		resolved := s.resolveOpenAIChannelPricing(ctx, billingModel, apiKey)
+		sizeTier := NormalizeImageBillingTierOrDefault(result.ImageSize)
+		pricingAPIKey := s.apiKeyWithFreshGroupMediaPricing(ctx, apiKey)
+		hasExplicitImagePrice := apiKeyHasConfiguredImagePrice(pricingAPIKey, sizeTier) ||
+			(resolved != nil && (resolved.Source == PricingSourceGroup || resolved.Source == PricingSourceChannel) &&
+				(resolved.Mode == BillingModePerRequest || resolved.Mode == BillingModeImage))
+		useReportedImageTokens := isGPTImage2BillingModel(billingModel) && tokens.ImageOutputTokens > 0 && !hasExplicitImagePrice
+		useReportedGPTImageTokens = useReportedImageTokens
+		// 渠道定价为 token 计费或 GPT Image 2 返回真实图片 token 时走 token 路径。
+		if !useReportedImageTokens && (resolved == nil || resolved.Mode != BillingModeToken) {
 			return s.calculateOpenAIImageCost(ctx, billingModel, apiKey, result, imageMultiplier), nil
 		}
 	}
@@ -558,16 +571,31 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 			if candidate == "" {
 				continue
 			}
-			cost, err := s.calculateOpenAIRecordUsageTokenCost(
-				ctx,
-				apiKey,
-				candidate,
-				multiplier,
-				pricingAt,
-				tokens,
-				serviceTier,
-				longContextBillingGate,
-			)
+			var cost *CostBreakdown
+			var err error
+			if useReportedGPTImageTokens {
+				// LiteLLM labels image-generation models as image mode, but GPT
+				// Image 2 supplies complete token usage. Calculate directly from
+				// its text/image token rate card instead of re-entering image mode.
+				cost, err = s.billingService.calculateCostWithServiceTierPolicy(
+					candidate, tokens, multiplier, serviceTier,
+					longContextBillingGate == nil || *longContextBillingGate,
+				)
+				if cost != nil {
+					cost.BillingMode = string(BillingModeToken)
+				}
+			} else {
+				cost, err = s.calculateOpenAIRecordUsageTokenCost(
+					ctx,
+					apiKey,
+					candidate,
+					multiplier,
+					pricingAt,
+					tokens,
+					serviceTier,
+					longContextBillingGate,
+				)
+			}
 			if err == nil {
 				tokenCost = cost
 				break
@@ -618,6 +646,11 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 	tokenCost.TotalCost += searchCost.TotalCost
 	tokenCost.ActualCost += searchCost.ActualCost
 	return tokenCost, nil
+}
+
+func isGPTImage2BillingModel(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	return model == "gpt-image-2" || strings.HasPrefix(model, "gpt-image-2-")
 }
 
 func isGrokVideoBillingModel(model string) bool {
