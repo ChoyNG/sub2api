@@ -1963,6 +1963,21 @@ func TestBuildOpenAIImagesResponsesRequest_PassesThroughNForMultiImageModels(t *
 	require.Equal(t, "draw a cat", gjson.GetBytes(body, "input.0.content.0.text").String())
 }
 
+func TestBuildOpenAIImagesResponsesRequest_ConfiguredMainModel(t *testing.T) {
+	t.Setenv("OPENAI_IMAGES_RESPONSES_MODEL", " gpt-5.6-luna ")
+	body, err := buildOpenAIImagesResponsesRequest(&OpenAIImagesRequest{
+		Prompt: "draw a cat",
+		Model:  "gpt-image-2",
+	}, "gpt-image-2")
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.6-luna", gjson.GetBytes(body, "model").String())
+	require.Equal(t, "gpt-image-2", gjson.GetBytes(body, "tools.0.model").String())
+
+	request := map[string]any{"model": "gpt-image-2", "prompt": "draw a cat"}
+	require.True(t, normalizeOpenAIResponsesImageOnlyModel(request))
+	require.Equal(t, "gpt-5.6-luna", request["model"])
+}
+
 func TestBuildOpenAIImagesResponsesRequest_ForcesImageToolChoice(t *testing.T) {
 	parsed := &OpenAIImagesRequest{
 		Endpoint: openAIImagesGenerationsEndpoint,

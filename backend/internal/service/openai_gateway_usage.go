@@ -650,7 +650,9 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 
 func isGPTImage2BillingModel(model string) bool {
 	model = strings.ToLower(strings.TrimSpace(model))
-	return model == "gpt-image-2" || strings.HasPrefix(model, "gpt-image-2-")
+	return model == "gpt-image-2" || strings.HasPrefix(model, "gpt-image-2-") ||
+		model == "gpt-image-2.5-flare" || strings.HasPrefix(model, "gpt-image-2.5-flare-") ||
+		model == "gpt-image-2.5-sunburst" || strings.HasPrefix(model, "gpt-image-2.5-sunburst-")
 }
 
 func isGrokVideoBillingModel(model string) bool {
